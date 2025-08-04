@@ -301,16 +301,27 @@ def health_check():
 def webhook():
     """Handle incoming webhook from Telegram"""
     try:
-        # Get the update from Telegram
-        update = Update.de_json(request.get_json(force=True), application.bot)
+        # Get JSON data from request
+        json_data = request.get_json(force=True)
         
-        # Process the update asynchronously
-        asyncio.create_task(application.process_update(update))
+        # Validate that we have proper Telegram update data
+        if not json_data or 'update_id' not in json_data:
+            logger.warning("Invalid webhook data received")
+            return "OK", 200  # Return OK to avoid Telegram retries
+        
+        # Create update object from Telegram data
+        update = Update.de_json(json_data, application.bot)
+        
+        # Process the update asynchronously in a thread-safe way
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(application.process_update(update))
+        loop.close()
         
         return "OK", 200
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
-        return "Error", 500
+        return "OK", 200  # Return OK to avoid Telegram retries
 
 async def set_webhook():
     """Set up the webhook with Telegram"""
