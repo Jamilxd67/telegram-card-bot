@@ -1,8 +1,11 @@
 import logging
 import os
-from telegram import Update, ForceReply
+from flask import Flask, request
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
+import asyncio
+import threading
 
 # Enable logging
 logging.basicConfig(
@@ -271,26 +274,88 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "Use `/help` to see available commands or `/search <prefix>` to search for cards."
     )
 
-def main() -> None:
-    """Start the bot."""
-    # Your bot token from @BotFather
-    BOT_TOKEN = "7706440354:AAFjos7T0P2yyx9evYYdH3zgO0QAMkqrFoo"
+# Flask app for webhook
+app = Flask(__name__)
+
+# Get bot token from environment variable (more secure)
+BOT_TOKEN = os.getenv('BOT_TOKEN', '7706440354:AAFjos7T0P2yyx9evYYdH3zgO0QAMkqrFoo')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')
+
+# Create the Application
+application = Application.builder().token(BOT_TOKEN).build()
+
+# Register handlers
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("help", help_command))
+application.add_handler(CommandHandler("search", search_cards))
+application.add_handler(CommandHandler("stats", stats_command))
+application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+@app.route('/')
+def health_check():
+    """Health check endpoint for Render"""
+    return "🤖 Telegram Card Bot is running!", 200
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle incoming webhook from Telegram"""
+    try:
+        # Get the update from Telegram
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        
+        # Process the update asynchronously
+        asyncio.create_task(application.process_update(update))
+        
+        return "OK", 200
+    except Exception as e:
+        logger.error(f"Error in webhook: {e}")
+        return "Error", 500
+
+async def set_webhook():
+    """Set up the webhook with Telegram"""
+    if WEBHOOK_URL:
+        webhook_url = f"{WEBHOOK_URL}/webhook"
+        await application.bot.set_webhook(url=webhook_url)
+        logger.info(f"Webhook set to: {webhook_url}")
+    else:
+        logger.warning("WEBHOOK_URL not set, webhook not configured")
+
+def run_async_in_thread():
+    """Run async operations in a separate thread"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     
-    # Create the Application
-    application = Application.builder().token(BOT_TOKEN).build()
+    async def setup():
+        # Initialize the application
+        await application.initialize()
+        await application.start()
+        
+        # Set up webhook
+        await set_webhook()
+        
+        logger.info("🤖 Bot initialized and webhook set up!")
+    
+    loop.run_until_complete(setup())
 
-    # Register handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("search", search_cards))
-    application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    # Run the bot until the user presses Ctrl-C
-    print("🤖 Bot is starting...")
-    print("Press Ctrl+C to stop the bot")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+def main():
+    """Start the bot with Flask webhook server"""
+    print("🤖 Starting Telegram Card Bot...")
+    
+    # Start async operations in background thread
+    thread = threading.Thread(target=run_async_in_thread)
+    thread.daemon = True
+    thread.start()
+    
+    # Get port from environment (Render provides this)
+    port = int(os.getenv('PORT', 5000))
+    
+    print(f"🌐 Starting Flask server on port {port}")
+    print("🔗 Webhook endpoint: /webhook")
+    print("❤️ Health check: /")
+    
+    # Start Flask app
+    app.run(host='0.0.0.0', port=port, debug=False)
 
 if __name__ == '__main__':
     main()
